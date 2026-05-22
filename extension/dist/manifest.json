@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "AlgoLens",
+  "version": "1.0.0",
+  "description": "AI-powered coding problem explainer for students",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": [
+    "https://leetcode.com/*",
+    "https://www.geeksforgeeks.org/*",
+    "https://www.hackerrank.com/*",
+    "https://codeforces.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://leetcode.com/problems/*",
+        "https://www.geeksforgeeks.org/*",
+        "https://www.hackerrank.com/challenges/*",
+        "https://codeforces.com/problemset/problem/*/*",
+        "https://codeforces.com/contest/*/problem/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_title": "AlgoLens"
+  }
+}
