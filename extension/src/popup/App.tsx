@@ -2,542 +2,390 @@ import React, { useState, useEffect, useCallback } from "react";
 import type { ProblemData, AnalysisResult } from "../types";
 
 type AppState = "idle" | "no-problem" | "ready" | "loading" | "done" | "error";
+type TabType = "explain" | "hints" | "solution";
+type LangType = "python" | "java" | "c";
 
-const PLATFORM_LABELS: Record<string, string> = {
-  leetcode: "LeetCode",
-  geeksforgeeks: "GeeksForGeeks",
-  hackerrank: "HackerRank",
-  codeforces: "Codeforces",
+const PLATFORM_META: Record<string, { label: string; color: string; dot: string }> = {
+  leetcode:      { label: "LeetCode",      color: "#FFA116", dot: "🟠" },
+  geeksforgeeks: { label: "GeeksForGeeks", color: "#2F8D46", dot: "🟢" },
+  hackerrank:    { label: "HackerRank",    color: "#00EA64", dot: "🟢" },
+  codeforces:    { label: "Codeforces",    color: "#1F8ACB", dot: "🔵" },
 };
 
-const PLATFORM_COLORS: Record<string, string> = {
-  leetcode: "#FFA116",
-  geeksforgeeks: "#2F8D46",
-  hackerrank: "#00EA64",
-  codeforces: "#1F8ACB",
+const LANG_LABELS: Record<LangType, string> = {
+  python: "Python",
+  java:   "Java",
+  c:      "C",
 };
 
-function SkeletonBlock({ h = "h-4" }: { h?: string }) {
-  return <div className={`shimmer rounded ${h} w-full`} />;
+/* ── tiny sub-components ─────────────────────────── */
+
+function Skeleton({ h, w = "w-full" }: { h: string; w?: string }) {
+  return <div className={`shimmer ${h} ${w}`} />;
 }
 
-function Tag({
-  children,
-  color,
-}: {
-  children: React.ReactNode;
-  color?: string;
-}) {
-  return (
-    <span
-      className="mono text-xs px-2 py-0.5 rounded-full border"
-      style={{
-        color: color ?? "var(--accent)",
-        borderColor: color ? `${color}44` : "rgba(0,255,135,0.3)",
-        background: color ? `${color}11` : "rgba(0,255,135,0.06)",
-      }}
-    >
-      {children}
-    </span>
-  );
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <p className="section-label">{children}</p>;
 }
 
-function Section({
-  label,
-  children,
-  delay = 0,
-}: {
-  label: string;
-  children: React.ReactNode;
-  delay?: number;
-}) {
-  return (
-    <div
-      className="fade-up"
-      style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
-    >
-      <p
-        className="mono text-xs mb-1.5 tracking-widest uppercase"
-        style={{ color: "var(--muted)" }}
-      >
-        {label}
-      </p>
-      <div
-        className="rounded-xl p-3 text-sm leading-relaxed"
-        style={{
-          background: "var(--surface2)",
-          border: "1px solid var(--border)",
-        }}
-      >
-        {children}
-      </div>
-    </div>
-  );
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`card p-3 ${className}`}>{children}</div>;
 }
 
-function ComplexityBadge({ time, space }: { time: string; space: string }) {
-  return (
-    <div
-      className="fade-up rounded-xl p-3 flex gap-3"
-      style={{
-        background: "var(--surface2)",
-        border: "1px solid var(--border)",
-        animationDelay: "200ms",
-        animationFillMode: "both",
-      }}
-    >
-      <div className="flex-1">
-        <p className="mono text-xs mb-1" style={{ color: "var(--muted)" }}>
-          TIME
-        </p>
-        <p
-          className="mono text-sm font-medium"
-          style={{ color: "var(--accent)" }}
-        >
-          {time}
-        </p>
-      </div>
-      <div
-        className="w-px self-stretch"
-        style={{ background: "var(--border)" }}
-      />
-      <div className="flex-1">
-        <p className="mono text-xs mb-1" style={{ color: "var(--muted)" }}>
-          SPACE
-        </p>
-        <p
-          className="mono text-sm font-medium"
-          style={{ color: "var(--accent2)" }}
-        >
-          {space}
-        </p>
-      </div>
-    </div>
-  );
-}
+/* ── main App ────────────────────────────────────── */
 
 export default function App() {
-  const [state, setState] = useState<AppState>("idle");
-  const [problem, setProblem] = useState<ProblemData | null>(null);
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [error, setError] = useState("");
+  const [state,        setState]        = useState<AppState>("idle");
+  const [problem,      setProblem]      = useState<ProblemData | null>(null);
+  const [analysis,     setAnalysis]     = useState<AnalysisResult | null>(null);
+  const [error,        setError]        = useState("");
   const [showSolution, setShowSolution] = useState(false);
-  const [activeTab, setActiveTab] = useState<"explain" | "hints" | "solution">(
-    "explain"
-  );
+  const [activeTab,    setActiveTab]    = useState<TabType>("explain");
+  const [lang,         setLang]         = useState<LangType>("python");
+  const [copying,      setCopying]      = useState(false);
 
+  /* detect problem on load */
   useEffect(() => {
-  // Small delay so content script has time to respond
-  setTimeout(() => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      if (!tab?.id) {
-        setState("no-problem");
-        return;
-      }
-      chrome.tabs.sendMessage(
-        tab.id,
-        { type: "GET_PROBLEM_DATA" },
-        (response: { type: string; payload: ProblemData | null } | undefined) => {
-          if (chrome.runtime.lastError || !response) {
-            setState("no-problem");
-            return;
+    setTimeout(() => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs[0];
+        if (!tab?.id) { setState("no-problem"); return; }
+        chrome.tabs.sendMessage(
+          tab.id,
+          { type: "GET_PROBLEM_DATA" },
+          (res: { type: string; payload: ProblemData | null } | undefined) => {
+            if (chrome.runtime.lastError || !res) { setState("no-problem"); return; }
+            if (res.type === "PROBLEM_DATA" && res.payload) {
+              setProblem(res.payload); setState("ready");
+            } else { setState("no-problem"); }
           }
-          if (response.type === "PROBLEM_DATA" && response.payload) {
-            setProblem(response.payload);
-            setState("ready");
-          } else {
-            setState("no-problem");
-          }
-        }
-      );
-    });
-  }, 300);
-}, []);
+        );
+      });
+    }, 300);
+  }, []);
 
+  /* send to backend */
   const analyze = useCallback(() => {
     if (!problem) return;
     setState("loading");
     setShowSolution(false);
     setAnalysis(null);
+    setActiveTab("explain");
 
     chrome.runtime.sendMessage(
-      { type: "ANALYZE_PROBLEM", payload: problem },
-      (
-        response:
-          | { type: "ANALYSIS_RESULT"; payload: AnalysisResult }
-          | { type: "ANALYSIS_ERROR"; payload: string }
-          | undefined
-      ) => {
-        if (!response) {
-          setError("No response from background script.");
-          setState("error");
-          return;
-        }
-        if (response.type === "ANALYSIS_RESULT") {
-          setAnalysis(response.payload);
-          setState("done");
-        } else {
-          setError(response.payload);
-          setState("error");
-        }
+      { type: "ANALYZE_PROBLEM", payload: { ...problem, language: lang } },
+      (res: { type: "ANALYSIS_RESULT"; payload: AnalysisResult }
+          | { type: "ANALYSIS_ERROR";  payload: string }
+          | undefined) => {
+        if (!res) { setError("No response from background."); setState("error"); return; }
+        if (res.type === "ANALYSIS_RESULT") { setAnalysis(res.payload); setState("done"); }
+        else { setError(res.payload); setState("error"); }
       }
     );
-  }, [problem]);
+  }, [problem, lang]);
 
-  const resetToReady = () => {
-    setState("ready");
-    setAnalysis(null);
-    setShowSolution(false);
-    setActiveTab("explain");
+  const reset = () => { setState("ready"); setAnalysis(null); setShowSolution(false); setActiveTab("explain"); };
+
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopying(true);
+    setTimeout(() => setCopying(false), 1500);
   };
 
+  const pm = problem ? (PLATFORM_META[problem.platform] ?? null) : null;
+
+  /* ── render ───────────────────────────────────── */
   return (
-    <div className="flex flex-col" style={{ minHeight: 560 }}>
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-4 py-3"
-        style={{ borderBottom: "1px solid var(--border)" }}
-      >
-        <div className="flex items-center gap-2">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center glow-pulse"
-            style={{
-              background: "rgba(0,255,135,0.12)",
-              border: "1px solid rgba(0,255,135,0.3)",
-            }}
-          >
-            <span style={{ fontSize: 14 }}>⬡</span>
-          </div>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", position: "relative", zIndex: 1 }}>
+
+      {/* ── HEADER ── */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "12px 16px",
+        background: "var(--surface)",
+        borderBottom: "1px solid var(--border)",
+        position: "relative", zIndex: 2,
+        flexShrink: 0,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* logo */}
+          <div style={{
+            width: 34, height: 34, borderRadius: 10,
+            background: "linear-gradient(135deg, var(--accent), #5b4fd4)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: "0 4px 14px rgba(124,106,255,0.45)",
+            fontSize: 15, flexShrink: 0,
+          }}>⬡</div>
           <div>
-            <p
-              className="text-sm font-bold tracking-tight"
-              style={{ color: "var(--text)", lineHeight: 1 }}
-            >
+            <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.3px", lineHeight: 1 }}>
               AlgoLens
-            </p>
-            <p className="mono text-xs" style={{ color: "var(--muted)" }}>
-              v1.0
-            </p>
+            </div>
+            <div className="mono" style={{ fontSize: 9, color: "var(--text3)", letterSpacing: "1px" }}>
+              AI TUTOR v1.0
+            </div>
           </div>
         </div>
 
-        {problem && (
-          <Tag color={PLATFORM_COLORS[problem.platform]}>
-            {PLATFORM_LABELS[problem.platform]}
-          </Tag>
+        {pm && (
+          <span className="platform-badge" style={{
+            background: `${pm.color}18`,
+            border: `1px solid ${pm.color}40`,
+            color: pm.color,
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: pm.color, display: "inline-block" }} />
+            {pm.label}
+          </span>
         )}
       </div>
 
-      {/* Body */}
-      <div
-        className="flex-1 overflow-y-auto p-4 space-y-4"
-        style={{ maxHeight: 496 }}
-      >
+      {/* ── BODY ── */}
+      <div className="popup-body" style={{ flex: 1, overflowY: "auto", maxHeight: 546 }}>
+
         {/* IDLE */}
         {state === "idle" && (
-          <div className="flex items-center justify-center h-48">
-            <div className="shimmer rounded-lg w-full h-32" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 8 }}>
+            <Skeleton h="h-16" />
+            <Skeleton h="h-10" />
+            <Skeleton h="h-10" w="w-3/4" />
           </div>
         )}
 
         {/* NO PROBLEM */}
         {state === "no-problem" && (
-          <div className="fade-up text-center py-12 space-y-3">
-            <p style={{ fontSize: 40 }}>🔍</p>
-            <p className="font-semibold" style={{ color: "var(--text)" }}>
-              No problem detected
-            </p>
-            <p className="text-sm" style={{ color: "var(--muted)" }}>
-              Open a problem on LeetCode, GeeksForGeeks, HackerRank, or
-              Codeforces
-            </p>
+          <div className="fade-up" style={{ textAlign: "center", padding: "40px 20px" }}>
+            <div style={{
+              width: 64, height: 64, borderRadius: 20, margin: "0 auto 16px",
+              background: "var(--surface2)", border: "1px solid var(--border)",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28,
+            }}>🔍</div>
+            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 8 }}>No problem detected</div>
+            <div style={{ color: "var(--text2)", fontSize: 12, lineHeight: 1.6 }}>
+              Navigate to a problem on<br />
+              <span style={{ color: "#FFA116" }}>LeetCode</span> · <span style={{ color: "#2F8D46" }}>GeeksForGeeks</span> · <span style={{ color: "#00EA64" }}>HackerRank</span> · <span style={{ color: "#1F8ACB" }}>Codeforces</span>
+            </div>
           </div>
         )}
 
         {/* READY */}
         {state === "ready" && problem && (
-          <div className="space-y-4 fade-up">
-            <div
-              className="rounded-xl p-4 space-y-2"
-              style={{
-                background: "var(--surface2)",
-                border: "1px solid var(--border)",
-              }}
-            >
-              <p
-                className="mono text-xs tracking-widest uppercase"
-                style={{ color: "var(--muted)" }}
-              >
-                Detected
-              </p>
-              <p
-                className="font-bold text-base leading-snug"
-                style={{ color: "var(--text)" }}
-              >
+          <div className="fade-up" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {/* problem card */}
+            <div className="card" style={{ padding: "14px 16px" }}>
+              <div className="section-label" style={{ marginBottom: 6 }}>Detected Problem</div>
+              <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.4, marginBottom: 8 }}>
                 {problem.title}
-              </p>
-              <p
-                className="text-xs leading-relaxed line-clamp-3"
-                style={{ color: "var(--muted)" }}
-              >
+              </div>
+              <div style={{
+                fontSize: 11.5, color: "var(--text2)", lineHeight: 1.6,
+                display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden",
+              }}>
                 {problem.description}
-              </p>
+              </div>
             </div>
 
-            <button
-              onClick={analyze}
-              className="w-full py-3 rounded-xl font-bold text-sm tracking-wide transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
-              style={{
-                background:
-                  "linear-gradient(135deg, var(--accent), var(--accent2))",
-                color: "#0a0a0f",
-              }}
-            >
-              Analyze Problem →
+            {/* language selector */}
+            <div>
+              <div className="section-label">Solution Language</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {(["python","java","c"] as LangType[]).map(l => (
+                  <button key={l} className={`lang-btn ${lang === l ? "active" : ""}`}
+                    onClick={() => setLang(l)}>
+                    {LANG_LABELS[l]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button className="btn-primary" style={{ width: "100%", padding: "13px" }} onClick={analyze}>
+              Analyze with AI →
             </button>
           </div>
         )}
 
         {/* LOADING */}
         {state === "loading" && (
-          <div className="space-y-3">
-            <p
-              className="mono text-xs text-center"
-              style={{ color: "var(--muted)" }}
-            >
-              Analyzing with AI...
-            </p>
-            {[...Array(5)].map((_, i) => (
-              <SkeletonBlock key={i} h={i === 0 ? "h-20" : "h-10"} />
-            ))}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 8 }}>
+            <div style={{ textAlign: "center", padding: "24px 0 16px" }}>
+              <div className="dot-loader" style={{ marginBottom: 12 }}>
+                <span /><span /><span />
+              </div>
+              <div className="mono" style={{ fontSize: 11, color: "var(--text3)" }}>
+                Analyzing problem...
+              </div>
+            </div>
+            <Skeleton h="h-20" />
+            <Skeleton h="h-12" />
+            <Skeleton h="h-12" w="w-4/5" />
+            <Skeleton h="h-12" w="w-3/5" />
           </div>
         )}
 
         {/* ERROR */}
         {state === "error" && (
-          <div
-            className="fade-up rounded-xl p-4 text-sm space-y-3"
-            style={{
-              background: "#1a0a0a",
-              border: "1px solid rgba(255,80,80,0.3)",
-            }}
-          >
-            <p className="font-semibold" style={{ color: "#ff5050" }}>
-              Something went wrong
-            </p>
-            <p style={{ color: "var(--muted)" }}>{error}</p>
-            <button
-              onClick={analyze}
-              className="mono text-xs px-3 py-1.5 rounded-lg"
-              style={{
-                background: "rgba(255,80,80,0.1)",
-                color: "#ff5050",
-                border: "1px solid rgba(255,80,80,0.3)",
-              }}
-            >
-              Retry
+          <div className="fade-up card" style={{
+            padding: "16px", borderColor: "rgba(255,80,80,0.25)",
+            background: "rgba(255,40,40,0.06)",
+          }}>
+            <div style={{ fontWeight: 600, color: "#ff6b6b", marginBottom: 6, fontSize: 13 }}>
+              ⚠ Analysis failed
+            </div>
+            <div style={{ color: "var(--text2)", fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+              {error}
+            </div>
+            <button className="btn-ghost" style={{ padding: "6px 14px" }} onClick={analyze}>
+              Try again
             </button>
           </div>
         )}
 
         {/* DONE */}
         {state === "done" && analysis && (
-          <div className="space-y-4">
-            {/* Problem title */}
-            {problem && (
-              <div className="fade-up">
-                <p
-                  className="font-bold text-sm leading-snug"
-                  style={{ color: "var(--text)" }}
-                >
+          <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+            {/* title + pattern row */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {problem && (
+                <div style={{ fontWeight: 700, fontSize: 13, lineHeight: 1.4 }}>
                   {problem.title}
-                </p>
-                <p
-                  className="mono text-xs mt-0.5"
-                  style={{ color: "var(--muted)" }}
-                >
-                  Pattern:{" "}
-                  <span style={{ color: "var(--accent)" }}>
-                    {analysis.pattern}
-                  </span>
-                </p>
+                </div>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <span className="pattern-tag">◈ {analysis.pattern}</span>
+                <span style={{ display: "flex", gap: 6 }}>
+                  <span className="chip chip-time">⏱ {analysis.timeComplexity}</span>
+                  <span className="chip chip-space">◻ {analysis.spaceComplexity}</span>
+                </span>
               </div>
-            )}
+            </div>
 
             {/* Tabs */}
-            <div
-              className="flex rounded-xl p-1 gap-1"
-              style={{ background: "var(--surface2)" }}
-            >
-              {(["explain", "hints", "solution"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className="flex-1 py-1.5 rounded-lg mono text-xs font-medium transition-all"
-                  style={{
-                    background:
-                      activeTab === tab ? "var(--surface)" : "transparent",
-                    color:
-                      activeTab === tab ? "var(--text)" : "var(--muted)",
-                    border:
-                      activeTab === tab
-                        ? "1px solid var(--border)"
-                        : "1px solid transparent",
-                  }}
-                >
-                  {tab}
+            <div className="tab-pill">
+              {(["explain","hints","solution"] as TabType[]).map(t => (
+                <button key={t} className={activeTab === t ? "active" : ""} onClick={() => setActiveTab(t)}>
+                  {t === "explain" ? "📖 Explain" : t === "hints" ? "💡 Hints" : "🔑 Solution"}
                 </button>
               ))}
             </div>
 
-            {/* Tab: explain */}
+            {/* EXPLAIN TAB */}
             {activeTab === "explain" && (
-              <div className="space-y-3">
-                <Section label="Simple explanation" delay={0}>
-                  {analysis.simpleExplanation}
-                </Section>
-                <Section label="Approach" delay={80}>
-                  {analysis.approach}
-                </Section>
-                <div
-                  className="fade-up"
-                  style={{
-                    animationDelay: "160ms",
-                    animationFillMode: "both",
-                  }}
-                >
-                  <p
-                    className="mono text-xs mb-1.5 tracking-widest uppercase"
-                    style={{ color: "var(--muted)" }}
-                  >
-                    Complexity
-                  </p>
-                  <ComplexityBadge
-                    time={analysis.timeComplexity}
-                    space={analysis.spaceComplexity}
-                  />
+              <div className="fade-up" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <SectionLabel>Simple Explanation</SectionLabel>
+                  <Card>
+                    <p style={{ fontSize: 12.5, lineHeight: 1.7, color: "var(--text)" }}>
+                      {analysis.simpleExplanation}
+                    </p>
+                  </Card>
+                </div>
+                <div>
+                  <SectionLabel>Approach</SectionLabel>
+                  <Card>
+                    <p style={{ fontSize: 12.5, lineHeight: 1.7, color: "var(--text)" }}>
+                      {analysis.approach}
+                    </p>
+                  </Card>
+                </div>
+                <div>
+                  <SectionLabel>Complexity</SectionLabel>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div className="card" style={{
+                      flex: 1, padding: "12px 14px",
+                      background: "rgba(124,106,255,0.07)",
+                      borderColor: "rgba(124,106,255,0.18)",
+                    }}>
+                      <div className="mono" style={{ fontSize: 9, color: "var(--text3)", letterSpacing: "1px", marginBottom: 5 }}>TIME</div>
+                      <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: "var(--accent)" }}>
+                        {analysis.timeComplexity}
+                      </div>
+                    </div>
+                    <div className="card" style={{
+                      flex: 1, padding: "12px 14px",
+                      background: "rgba(0,212,255,0.06)",
+                      borderColor: "rgba(0,212,255,0.18)",
+                    }}>
+                      <div className="mono" style={{ fontSize: 9, color: "var(--text3)", letterSpacing: "1px", marginBottom: 5 }}>SPACE</div>
+                      <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: "var(--accent2)" }}>
+                        {analysis.spaceComplexity}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* Tab: hints */}
+            {/* HINTS TAB */}
             {activeTab === "hints" && (
-              <div className="space-y-2">
+              <div className="fade-up" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {analysis.hints.map((hint, i) => (
-                  <div
-                    key={i}
-                    className="fade-up flex gap-3 rounded-xl p-3"
-                    style={{
-                      background: "var(--surface2)",
-                      border: "1px solid var(--border)",
-                      animationDelay: `${i * 60}ms`,
-                      animationFillMode: "both",
-                    }}
-                  >
-                    <span
-                      className="mono text-xs font-medium mt-0.5 shrink-0"
-                      style={{ color: "var(--accent)", minWidth: 16 }}
-                    >
-                      {String(i + 1).padStart(2, "0")}
-                    </span>
-                    <p
-                      className="text-sm leading-relaxed"
-                      style={{ color: "var(--text)" }}
-                    >
-                      {hint}
-                    </p>
+                  <div key={i} className="hint-item"
+                    style={{ animationDelay: `${i * 70}ms`, animationFillMode: "both" }}>
+                    <span className="hint-num">H{i + 1}</span>
+                    <p style={{ fontSize: 12.5, lineHeight: 1.65, color: "var(--text)" }}>{hint}</p>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* Tab: solution */}
+            {/* SOLUTION TAB */}
             {activeTab === "solution" && (
-              <div className="fade-up space-y-3">
+              <div className="fade-up" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {/* lang switcher inside solution tab */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <SectionLabel>Language</SectionLabel>
+                  <div style={{ display: "flex", gap: 5 }}>
+                    {(["python","java","c"] as LangType[]).map(l => (
+                      <button key={l} className={`lang-btn ${lang === l ? "active" : ""}`}
+                        onClick={() => setLang(l)}>
+                        {LANG_LABELS[l]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {!showSolution ? (
-                  <div
-                    className="rounded-xl p-5 text-center space-y-3"
-                    style={{
-                      background: "var(--surface2)",
-                      border: "1px solid var(--border)",
-                    }}
-                  >
-                    <p style={{ fontSize: 32 }}>🔒</p>
-                    <p
-                      className="font-semibold text-sm"
-                      style={{ color: "var(--text)" }}
-                    >
-                      Try it yourself first
-                    </p>
-                    <p className="text-xs" style={{ color: "var(--muted)" }}>
-                      Use the hints tab to attempt the problem before viewing
-                      the solution.
-                    </p>
-                    <button
-                      onClick={() => setShowSolution(true)}
-                      className="mt-1 px-4 py-2 rounded-lg mono text-xs font-medium transition-all hover:scale-[1.03]"
-                      style={{
-                        background: "rgba(0,255,135,0.08)",
-                        color: "var(--accent)",
-                        border: "1px solid rgba(0,255,135,0.25)",
-                      }}
-                    >
-                      I give up, show solution
+                  <div className="lock-screen">
+                    <div className="lock-icon">🔒</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>
+                      Attempt it first!
+                    </div>
+                    <div style={{ color: "var(--text2)", fontSize: 12, lineHeight: 1.6, marginBottom: 16 }}>
+                      Read the hints and try to solve the problem yourself before revealing the solution.
+                    </div>
+                    <button className="btn-primary" style={{ padding: "10px 20px", fontSize: 12 }}
+                      onClick={() => setShowSolution(true)}>
+                      Show Solution
                     </button>
                   </div>
                 ) : (
-                  <div
-                    className="rounded-xl overflow-hidden"
-                    style={{ border: "1px solid var(--border)" }}
-                  >
-                    <div
-                      className="px-3 py-2 flex items-center justify-between"
-                      style={{
-                        background: "#0d0d16",
-                        borderBottom: "1px solid var(--border)",
-                      }}
-                    >
-                      <span
-                        className="mono text-xs"
-                        style={{ color: "var(--muted)" }}
-                      >
-                        optimal solution
-                      </span>
-                      <button
-                        onClick={() =>
-                          navigator.clipboard.writeText(analysis.optimalSolution)
-                        }
-                        className="mono text-xs px-2 py-0.5 rounded"
-                        style={{
-                          color: "var(--accent)",
-                          background: "rgba(0,255,135,0.06)",
-                        }}
-                      >
-                        copy
-                      </button>
+                  <div>
+                    <div className="code-block">
+                      <div className="code-header">
+                        <div className="code-dots">
+                          <span style={{ background: "#ff5f57" }} />
+                          <span style={{ background: "#febc2e" }} />
+                          <span style={{ background: "#28c840" }} />
+                        </div>
+                        <span className="mono" style={{ fontSize: 10, color: "var(--text3)" }}>
+                          {LANG_LABELS[lang].toLowerCase()} · optimal
+                        </span>
+                        <button className="btn-ghost" style={{ padding: "3px 10px", fontSize: 10 }}
+                          onClick={() => copy(getSolution(analysis, lang))}>
+                          {copying ? "✓ copied" : "copy"}
+                        </button>
+                      </div>
+                      <div className="code-body">
+                        <pre>{getSolution(analysis, lang)}</pre>
+                      </div>
                     </div>
-                    <pre
-                      className="mono text-xs p-3 overflow-x-auto leading-relaxed"
-                      style={{
-                        color: "#c9d1d9",
-                        background: "#0d0d16",
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      {analysis.optimalSolution}
-                    </pre>
                   </div>
                 )}
               </div>
             )}
 
-            <button
-              onClick={resetToReady}
-              className="w-full py-2 mono text-xs rounded-xl transition-colors"
-              style={{ color: "var(--muted)", border: "1px solid var(--border)" }}
-            >
+            {/* re-analyze */}
+            <button className="btn-ghost" style={{ width: "100%", padding: "9px", fontSize: 12 }}
+              onClick={reset}>
               ← Re-analyze
             </button>
           </div>
@@ -545,4 +393,13 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+/* pick the right solution field based on lang */
+function getSolution(analysis: AnalysisResult, lang: LangType): string {
+  switch (lang) {
+    case "java":   return (analysis as any).optimalSolutionJava   ?? analysis.optimalSolution;
+    case "c":      return (analysis as any).optimalSolutionC      ?? analysis.optimalSolution;
+    default:       return analysis.optimalSolution;
+  }
 }

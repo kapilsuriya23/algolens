@@ -5,6 +5,7 @@ export interface ProblemData {
   description: string;
   platform: Platform;
   url: string;
+  language?: string;
 }
 
 export interface AnalysisResult {
@@ -15,6 +16,8 @@ export interface AnalysisResult {
   spaceComplexity: string;
   hints: string[];
   optimalSolution: string;
+  optimalSolutionJava: string;
+  optimalSolutionC: string;
 }
 
 export type MessageType =

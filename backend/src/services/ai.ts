@@ -3,6 +3,7 @@ export interface ProblemData {
   description: string;
   platform: string;
   url: string;
+  language?: string;
 }
 
 export interface AnalysisResult {
@@ -13,25 +14,35 @@ export interface AnalysisResult {
   spaceComplexity: string;
   hints: string[];
   optimalSolution: string;
+  optimalSolutionJava: string;
+  optimalSolutionC: string;
 }
 
 export async function analyzeProblem(problem: ProblemData): Promise<AnalysisResult> {
-  const prompt = `You are an expert CS tutor helping students understand coding problems. Analyze this problem and return ONLY valid JSON, no markdown, no explanation outside the JSON.
+  const prompt = `You are an expert CS tutor. Analyze this coding problem and return ONLY valid JSON — no markdown, no text outside the JSON.
 
 Problem Title: ${problem.title}
 Platform: ${problem.platform}
 Description: ${problem.description}
 
-Return this exact JSON structure:
+Return this EXACT JSON structure with all fields populated:
 {
-  "simpleExplanation": "2-3 sentences explaining the problem in plain English",
-  "pattern": "e.g. Sliding Window / Two Pointers / Dynamic Programming / Graph BFS",
-  "approach": "Step-by-step approach in 3-5 concise sentences",
+  "simpleExplanation": "2-3 sentences explaining the problem in plain English for a beginner",
+  "pattern": "single algorithm pattern e.g. Binary Search / Two Pointers / Dynamic Programming",
+  "approach": "step-by-step approach in 4-5 concise sentences",
   "timeComplexity": "e.g. O(n log n)",
-  "spaceComplexity": "e.g. O(n)",
-  "hints": ["hint 1", "hint 2", "hint 3"],
-  "optimalSolution": "complete working Python solution with comments"
-}`;
+  "spaceComplexity": "e.g. O(1)",
+  "hints": [
+    "first hint — directional nudge without giving away the answer",
+    "second hint — more specific guidance",
+    "third hint — almost there, very close to solution"
+  ],
+  "optimalSolution": "complete working Python solution with inline comments explaining each step",
+  "optimalSolutionJava": "complete working Java solution with inline comments explaining each step",
+  "optimalSolutionC": "complete working C solution with inline comments explaining each step"
+}
+
+IMPORTANT: All three solutions must be complete, correct, and compilable. Include all necessary imports/headers.`;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -44,8 +55,8 @@ Return this exact JSON structure:
     body: JSON.stringify({
       model: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
-      max_tokens: 1500,
+      temperature: 0.2,
+      max_tokens: 3000,
     }),
   });
 
@@ -61,7 +72,7 @@ Return this exact JSON structure:
   const content = data.choices[0]?.message?.content;
   if (!content) throw new Error("No response from OpenRouter");
 
-  // Strip markdown code fences if model wraps JSON in ```
+  // Strip markdown fences if present
   const cleaned = content
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
